@@ -1,138 +1,68 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import pyotp, time
 from database import get_db
 
 app = Flask(__name__)
 
-@app.route('/')
-def health():
-    return "Web Server is Running ✅"
+@app.route('/api/otps')
+def get_otps():
+    uid = request.args.get('uid')
+    if not uid: return jsonify({"error": "No UID"}), 400
+    with get_db() as conn:
+        rows = conn.execute("SELECT account, secret FROM links WHERE user_id=?", (uid,)).fetchall()
+    
+    current_time = int(time.time())
+    remaining = 30 - (current_time % 30)
+    data = [{"name": r["account"], "otp": pyotp.TOTP(r["secret"].replace(" ","")).now()} for r in rows]
+    return jsonify({"accounts": data, "remaining": remaining})
 
 @app.route('/miniapp')
 def miniapp():
-    user_id = request.args.get('uid')
-    if not user_id: return "Invalid User ID", 400
-    
-    with get_db() as conn:
-        # শুধুমাত্র সেই ইউজারের ডাটাবেস থেকে ডাটা নেওয়া হচ্ছে
-        accounts = conn.execute("SELECT * FROM links WHERE user_id=?", (user_id,)).fetchall()
-
-    # বর্তমান সময়ের ওপর ভিত্তি করে ৩০ সেকেন্ডের টাইমার ক্যালকুলেশন
-    current_time = int(time.time())
-    remaining_sec = 30 - (current_time % 30)
-    # প্রোগ্রেস বারের প্রস্থ (Width) শতাংশে
-    progress_width = (remaining_sec / 30) * 100
-
-    html = f"""
+    uid = request.args.get('uid')
+    return f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <style>
-            body {{ background: #0f172a; color: white; font-family: 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 15px; user-select: none; }}
-            .container {{ max-width: 500px; margin: 0 auto; }}
-            .header {{ text-align: center; font-size: 18px; font-weight: bold; margin-bottom: 20px; color: #38bdf8; }}
-            
-            /* ওটিপি কার্ড ডিজাইন */
-            .card {{ 
-                background: #1e293b; border-radius: 16px; padding: 18px; 
-                margin-bottom: 12px; border: 1px solid #334155;
-                box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-                position: relative; overflow: hidden; cursor: pointer;
-                transition: transform 0.1s;
-            }}
-            .card:active {{ transform: scale(0.97); background: #262f3f; }}
-
-            /* লোগো এবং নাম পাশাপাশি */
-            .top-row {{ display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }}
-            .logo {{ 
-                width: 42px; height: 42px; border-radius: 10px; background: #38bdf8; 
-                display: flex; align-items: center; justify-content: center; 
-                font-weight: bold; color: #0f172a; font-size: 20px;
-            }}
-            .name-sec {{ flex-grow: 1; }}
-            .acc-name {{ font-size: 15px; font-weight: 600; color: #f8fafc; letter-spacing: 0.5px; }}
-            .label {{ font-size: 11px; color: #38bdf8; opacity: 0.8; text-transform: uppercase; }}
-
-            /* ওটিপি কোড ডিসপ্লে */
-            .otp-display {{ 
-                font-size: 34px; font-weight: 700; color: #38bdf8; 
-                letter-spacing: 5px; text-align: center; margin: 8px 0;
-            }}
-
-            /* ৩০ সেকেন্ডের টাইমার লাইন (Progress Bar) */
-            .progress-container {{ width: 100%; height: 4px; background: #334155; border-radius: 2px; margin-top: 15px; overflow: hidden; }}
-            .progress-bar {{ height: 100%; background: #38bdf8; width: {progress_width}%; transition: width 1s linear; }}
-            
-            .timer-text {{ text-align: center; font-size: 12px; opacity: 0.6; margin-top: 8px; }}
-            
-            /* কপি টোস্ট নোটিফিকেশন */
-            .toast {{ 
-                position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); 
-                background: #38bdf8; color: #0f172a; padding: 10px 25px; 
-                border-radius: 25px; font-weight: bold; display: none; z-index: 100;
-            }}
+            body {{ background: #0f172a; color: white; font-family: sans-serif; margin: 0; padding: 15px; user-select: none; }}
+            .card {{ background: #1e293b; border-radius: 12px; padding: 15px; margin-bottom: 12px; border: 1px solid #334155; }}
+            .row {{ display: flex; align-items: center; gap: 12px; }}
+            .logo {{ width: 40px; height: 40px; background: #38bdf8; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #0f172a; font-weight: bold; font-size: 20px; }}
+            .otp {{ font-size: 30px; font-weight: bold; color: #38bdf8; text-align: center; margin: 10px 0; letter-spacing: 3px; cursor: pointer; }}
+            .p-bar {{ height: 4px; background: #334155; border-radius: 2px; overflow: hidden; }}
+            .p-fill {{ height: 100%; background: #38bdf8; width: 100%; transition: width 1s linear; }}
+            .time-text {{ text-align: center; font-size: 12px; opacity: 0.6; margin-top: 5px; }}
         </style>
     </head>
     <body>
-        <div class="container">
-            <div class="header">🛡️ 2FA Authenticator</div>
-            <div id="toast" class="toast">Copied!</div>
-            <div id="list">
-    """
-    
-    if accounts:
-        for row in accounts:
-            try:
-                totp = pyotp.TOTP(row['secret'].replace(" ", ""))
-                otp = totp.now()
-                # নামের প্রথম অক্ষর লোগো হিসেবে
-                initial = row['account'][0].upper()
-                
-                html += f"""
-                <div class="card" onclick="copyCode('{otp}')">
-                    <div class="top-row">
-                        <div class="logo">{initial}</div>
-                        <div class="name-sec">
-                            <div class="label">Verification Code</div>
-                            <div class="acc-name">{row['account']}</div>
-                        </div>
-                    </div>
-                    <div class="otp-display">{otp[:3]} {otp[3:]}</div>
-                    <div class="progress-container">
-                        <div class="progress-bar"></div>
-                    </div>
-                    <div class="timer-text">Next OTP in: {remaining_sec}s</div>
-                </div>"""
-            except: continue
-    else:
-        html += "<p style='text-align:center; opacity:0.5; margin-top:50px;'>No accounts found!</p>"
-
-    html += f"""
-            </div>
-        </div>
+        <div id="list">Loading...</div>
         <script>
-            Telegram.WebApp.ready();
-            Telegram.WebApp.expand();
-
-            // ক্লিপবোর্ডে কপি এবং হ্যাপটিক ফিডব্যাক
-            function copyCode(code) {{
-                navigator.clipboard.writeText(code);
-                const t = document.getElementById('toast');
-                t.style.display = 'block';
-                if(window.Telegram && Telegram.WebApp.HapticFeedback) {{
-                    Telegram.WebApp.HapticFeedback.notificationOccurred('success');
-                }}
-                setTimeout(() => t.style.display='none', 1500);
+            let remain = 30;
+            async def update() {{
+                const res = await fetch(`/api/otps?uid={uid}`);
+                const data = await res.json();
+                remain = data.remaining;
+                document.getElementById('list').innerHTML = data.accounts.map(a => `
+                    <div class="card" onclick="copy('${{a.otp}}')">
+                        <div class="row"><div class="logo">${{a.name[0].toUpperCase()}}</div><b>${{a.name}}</b></div>
+                        <div class="otp">${{a.otp.slice(0,3)}} ${{a.otp.slice(3)}}</div>
+                        <div class="p-bar"><div class="p-fill" style="width:${{(remain/30)*100}}%"></div></div>
+                        <div class="time-text">Next OTP in: ${{remain}}s</div>
+                    </div>`).join('');
             }}
-
-            // ওটিপি রিফ্রেশ লজিক (৩০ সেকেন্ড চক্র অনুযায়ী)
-            setInterval(() => {{
-                location.reload();
-            }}, {remaining_sec * 1000 if remaining_sec > 0 else 1000});
+            function copy(c) {{
+                navigator.clipboard.writeText(c);
+                if(window.Telegram) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+            }}
+            setInterval(() => {{ 
+                if(remain > 0) {{ 
+                    remain--; 
+                    document.querySelectorAll('.p-fill').forEach(b => b.style.width = (remain/30)*100 + '%');
+                    document.querySelectorAll('.time-text').forEach(t => t.innerText = "Next OTP in: " + remain + "s");
+                }} else {{ update(); }}
+            }}, 1000);
+            update(); Telegram.WebApp.ready(); Telegram.WebApp.expand();
         </script>
-    </body>
-    </html>"""
-    return html
+    </body></html>"""
