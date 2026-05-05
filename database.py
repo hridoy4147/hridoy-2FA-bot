@@ -7,5 +7,11 @@ def get_db():
 
 def init_db():
     with get_db() as conn:
-        conn.execute('CREATE TABLE IF NOT EXISTS links (token TEXT PRIMARY KEY, account TEXT, secret TEXT, expiry REAL)')
+        # user_id কলামসহ টেবিল তৈরি
+        conn.execute('''CREATE TABLE IF NOT EXISTS links 
+                        (token TEXT PRIMARY KEY, 
+                         user_id INTEGER, 
+                         account TEXT, 
+                         secret TEXT, 
+                         expiry REAL)''')
         conn.commit()
